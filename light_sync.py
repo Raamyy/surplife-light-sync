@@ -44,18 +44,10 @@ from frame_color_lib import FrameColorLib
 
 # SETUP VARIABLES (tweak them for preffered effect)
 
-# Your Philips Hue Bridge IP
-BRIDGE_IP = '192.168.1.22'
 
 # Part of screen to capture (useful if run in multiple instance for custom effects like stereo)
 # full, left, right, side-left side-right
 SCREEN_PART_TO_CAPTURE = "full"
-
-# Your Philips HUE lights that will be updated by this script
-MY_LIGHT_NAMES = ['Light1','Light2']
-
-# IDS of Your Philips HUE lights that will be updated by this script
-MY_LIGHT_IDS = []
 
 # Dim lights instead of turn off
 DIM_LIGHTS_INSTEAD_OF_TURN_OFF = False
@@ -119,9 +111,6 @@ NUMBER_OF_K_MEANS_CLUSTERS = 6
 # Image will be scaled to a much smaller size resulting in real time updating of the lights
 INPUT_IMAGE_REDUCED_SIZE = 100
 
-# PHUE config file name
-PHUE_CONFIG_FILE = "phue_config"
-
 # BETA version!!!
 # Auto adjust performance
 AUTO_ADJUST_PERFORMANCE = True
@@ -173,8 +162,27 @@ ON_OFF_FLICKER_MIN_THRESHOLD_FLICKER_CORRECTION_VALUE = 0.2
 CAN_UPDATE_HUE = True
 
 # Init convertor lib used to format color for HUE
-DISCOVERY_LIB = DiscoveryLib()
 FRAME_COLOR_LIB = FrameColorLib()
+
+
+
+def extract_bulb_ips():
+    return ['192.168.1.2', '192.168.1.4']
+    s = subprocess.getstatusoutput(f'py -m flux_led.fluxled -s')
+    s = s[1].split('\n')[1:]
+    ips = []
+    for item in s:
+        ip = item.split()[-1]  # Split by whitespace and take the last part
+        ips.append(ip)
+    return ips
+
+# color is in BGR
+def change_color(ip, color):
+    print(color)
+    color_str = list(map(str, color[0:3]))
+    print(color_str)
+    command = f"py -m flux_led.fluxled {ip} -c {color_str[2]},{color_str[1]},{color_str[0]}"
+    os.system(command)
 
 def clear_update_flag():
     """Clears the hue update request lock"""
@@ -194,12 +202,16 @@ def usage(parser):
 def main(argv):
     "main routine"
 
+
+
     # Variable Defaults
-    bridge_ip = BRIDGE_IP
     user = None
     screen_part_to_capture = SCREEN_PART_TO_CAPTURE
-    my_light_names = MY_LIGHT_NAMES
-    my_light_ids = MY_LIGHT_IDS
+    bulb_ips = extract_bulb_ips()
+    number_of_lights = len(bulb_ips)
+    bulb_ip = ''
+
+
     dim_brightness = DIM_BRIGHTNESS
     starting_brightness = STARTING_BRIGHTNESS
     dim_lights_instead_of_turn_off = DIM_LIGHTS_INSTEAD_OF_TURN_OFF
@@ -292,15 +304,10 @@ def main(argv):
     if args.screenpart:
         screen_part_to_capture = args.screenpart
         print ("Set screen part to capture: " + screen_part_to_capture)
-    if args.autodiscovery:
-        bridge_ip = DISCOVERY_LIB.getBridgeIP()
-        print ("Discovered bridge ip: " + bridge_ip)
-    if args.lightids:
-        my_light_ids = args.lightids.split(",")
-        print ("Set lights: " + ", ".join(my_light_ids))
-    if args.lights:
-        my_light_names = args.lights.split(",")
-        print ("Set lights: " + ", ".join(my_light_names))
+        if "right" in screen_part_to_capture:
+            bulb_ip = bulb_ips[0]
+        else:
+            bulb_ip = bulb_ips[1]
     if args.dimbrightness:
         try:
             dim_brightness = int(args.dimbrightness)
@@ -596,12 +603,6 @@ def main(argv):
                channelsminthreshold, channelsmaxthreshold values must be in interval [0, 256]')
         usage(parser)
 
-    # LIGHTS VALIDATION
-    number_of_lights = len(my_light_ids) | len(my_light_names)
-    if (number_of_lights == 0):
-        print ('Please select at least one light.')
-        usage(parser)
-
     if not dim_lights_instead_of_turn_off:
         dim_brightness = 3
 
@@ -636,55 +637,10 @@ def main(argv):
     # If the app is not registered and the button is not pressed,
     # press the button and call connect() (this only needs to be run a single time)
 
-    # Your bridge IP
-    connected = False
-    shown_instructions = False
-    current_dir = os.path.dirname(__file__)
-    phue_config_file = os.path.join(current_dir, PHUE_CONFIG_FILE)
-    bridge_ip = DISCOVERY_LIB.getBridgeIP()
-    print ("Discovered bridge ip: " + bridge_ip)
-    print('Connecting to bridge')
-    i = 0
-    while i < 30:
-        time.sleep(1)
-        try:
-            bridge = Bridge(bridge_ip, None, phue_config_file)
-        except PhueRegistrationException:
-            if not shown_instructions:
-                print('Press the Hue Bridge button in order to register')
-                shown_instructions = True
-            i += 1
-            continue
-        else:
-            connected = True
-            break
-    if not connected:
-        print('Failed to register to bridge')
-        sys.exit()
-
-    bridge.connect()
-
-    print ('Connected to Hue Bridge with address {0}'.format(bridge_ip))
-
-    if (user == None):
-        user = bridge.username
-
-    light_names = bridge.get_light_objects('name')
-
-    # Init lights
-    if not my_light_ids:
-        for hue_light in my_light_names:
-            light_names[hue_light].on = True
-            light_names[hue_light].brightness = starting_brightness
-            my_light_ids.append(light_names[hue_light].light_id)
-    else:
-        for hue_light_id in my_light_ids:
-            bridge.set_light(hue_light_id, 'on', True)
-            bridge.set_light(hue_light_id, 'bri', starting_brightness)
            
     with mss.mss() as sct:
         # Part of the screen to capture (use if you want to create a multiple color effect)
-        full_mon=sct.monitors[1]
+        full_mon=sct.monitors[2]
         monitor = full_mon
         
         if screen_part_to_capture == "full":
@@ -710,7 +666,13 @@ def main(argv):
             last_time = time.time()
             
             # Get raw pixels from the screen, save it to a Numpy array
-            img = numpy.array(sct.grab(monitor))
+            sct_img = sct.grab(monitor)
+            img = numpy.array(sct_img)
+
+            # mss.tools.to_png(sct_img.rgb, sct_img.size, output="test2.png")
+
+
+            # print("new img")
 
             # Shrink image for performance sake
             current_frame = FRAME_COLOR_LIB.shrink_image(img, input_image_reduced_size)
@@ -877,25 +839,27 @@ def main(argv):
                     result_color.color[0], result_color.color[1], result_color.color[2]))
                 print ('brightness: {0}'.format(current_brightness))
 
-                if dim_lights_instead_of_turn_off:
-                    command = {'xy': result_color.get_hue_color(),
-                                'bri': current_brightness,
-                                'transitiontime': current_transition_time}
-                else: 
-                    command = {
-                                'on': not go_dark,
-                                'xy': result_color.get_hue_color(),
-                                'bri': current_brightness,
-                                'transitiontime': current_transition_time}
+                # if dim_lights_instead_of_turn_off:
+                #     command = {'xy': result_color.get_hue_color(),
+                #                 'bri': current_brightness,
+                #                 'transitiontime': current_transition_time}
+                # else: 
+                #     command = {
+                #                 'on': not go_dark,
+                #                 'xy': result_color.get_hue_color(),
+                #                 'bri': current_brightness,
+                #                 'transitiontime': current_transition_time}
                 
                 # Slower request possibilities at the time of writing:
                 #bridge.set_light(my_light_names, command)
                 #bridge.set_group(group_id, command)
                 # r = requests.put('http://%s/api/%s/groups/%s/action'%(bridge_ip, user, group_id), data = json.dumps(command))
                 
-                for hue_light_id in my_light_ids:
-                    requests.put('http://%s/api/%s/lights/%s/state'%(bridge_ip, user, hue_light_id), data = json.dumps(command))
-                    #print(r.text)
+                # for hue_light_id in my_light_ids:
+                #     requests.put('http://%s/api/%s/lights/%s/state'%(bridge_ip, user, hue_light_id), data = json.dumps(command))
+                #     #print(r.text)
+
+                change_color(bulb_ip, result_color.color)
 
                 prev_fps = 1 / (time.time()-last_time)
                 print ('fps: {0}'.format(prev_fps))
